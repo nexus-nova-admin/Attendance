@@ -142,11 +142,26 @@ app.get("/alldata", (req, res) => {
     })
 })
 
+//get all roles
+app.get("/getallroles/:project_id", (req, res) => {
+    const projectId = req.params.project_id;
+    const getRolesQuery = "SELECT * FROM roles WHERE project_id = ?";
+    db.query(getRolesQuery, [projectId], (err, result) => {
+        if (err) {
+            console.log(err);
+            res.status(500).send("Error retrieving roles");
+        } else {
+            res.send(result);
+        }
+    });
+});
+
 
 //fetch members according to projects
-app.get("/getmembers/:id", (req, res) => {
+app.get("/getmembers/:id/:role_id", (req, res) => {
     const id = req.params.id
-    const fetchmembers = `select  projects.project_id, projects.projectName, projectmember.member, projectmember.PM_id from projects inner join projectmember on projects.project_id=projectmember.project_id where projects.project_id=${id};`;
+    const role_id = req.params.role_id
+    const fetchmembers = `select  projects.project_id, projects.projectName, projectmember.member, projectmember.PM_id from projects inner join projectmember on projects.project_id=projectmember.project_id where projects.project_id=${id} AND projectmember.role_id = ${role_id};;`;
     db.query(fetchmembers, (err, doc) => {
         if (err) {
             res.send(err)
@@ -173,17 +188,23 @@ app.get("/tovalidatethemember/:pmid/:attdate", (req, res) => {
     })
 })
 
-app.get("/getstatusmember/:attdate/:id", (req, res) => {
+app.get("/getstatusmember/:attdate/:id/:role_id", (req, res) => {
 
     const attdate = req.params.attdate
     const id = req.params.id
+    const role_id = req.params.role_id
 
     const getstatus = `
-    SELECT pm.member, a.attstatus,a.Time_In
-    FROM atte a 
-    JOIN projectmember pm ON a.PM_id = pm.PM_id 
+    SELECT a.attstatus, pm.member,a.Time_In
+    FROM atte AS a
+    JOIN projectmember AS pm ON a.PM_id = pm.PM_id
     WHERE a.attdate = '${attdate}'
-    AND a.proj_id = ${id} order by pm.member;`
+      AND pm.project_id = ${id}
+      AND pm.role_id = ${role_id}
+    GROUP BY a.attstatus, pm.member,a.Time_In;
+    
+    `;
+
     db.query(getstatus, (err, doc) => {
         if (err) {
             res.send(err)
@@ -194,25 +215,47 @@ app.get("/getstatusmember/:attdate/:id", (req, res) => {
     })
 })
 
-//markallpresent---------------------------------------------
-app.post("/markallpresent/:id/:formattedToday", (req, res) => {
 
-    const { id,formattedToday } = req.body
-    const markallpresent = "INSERT INTO `attendance`.`atte` (`proj_id`, `PM_id`, `attdate`, `attstatus`, `attvalue`, `Time_In`, `Time_out`) SELECT `project_id`, `PM_id`, ?, 'Present', 1, '9:00', '17:00' FROM `attendance`.`projectmember` WHERE `project_id` = ?";
-    db.query(markallpresent, [formattedToday,id], (err, doc) => {
+
+//markallpresent---------------------------------------------
+app.post("/markallpresent/:role_id/:project_id/:formattedToday", (req, res) => {
+    const { role_id, project_id, formattedToday } = req.params;
+    const markallpresent = `
+    INSERT INTO \`attendance\`.\`atte\` (\`proj_id\`, \`PM_id\`, \`attdate\`, \`attstatus\`, \`attvalue\`, \`Time_In\`, \`Time_out\`) 
+    SELECT \`project_id\`, \`PM_id\`, '${formattedToday}', 'Present', 1, '08:30', '17:00' 
+    FROM \`attendance\`.\`projectmember\` WHERE \`project_id\` = ${project_id} and \`role_id\` = ${role_id};
+    `;
+    
+
+    db.query(markallpresent, [formattedToday,project_id,role_id], (err, doc) => {
         if (err) {
             console.log(err);
         } else {
             res.json(doc);
         }
+    });
+});
 
-    })
-})
+
 
 
 app.get("/getmembers/:id", (req, res) => {
     const id = req.params.id
     const fetchmembers = `select  projects.project_id, projects.projectName, projectmember.member, projectmember.PM_id from projects inner join projectmember on projects.project_id=projectmember.project_id where projects.project_id=${id};`;
+    db.query(fetchmembers, (err, doc) => {
+        if (err) {
+            res.send(err)
+        }
+        else {
+            res.json(doc)
+
+        }
+    })
+})
+
+app.get("/getrolename/:role_id", (req, res) => {
+    const role_id = req.params.role_id
+    const fetchmembers = `select role_name from roles where role_id = ${role_id};`;
     db.query(fetchmembers, (err, doc) => {
         if (err) {
             res.send(err)
@@ -271,16 +314,86 @@ app.get("/getabsentdays/:id", (req, res) => {
 //todownloadreport-----------
 
 
-app.get("/downloadreport/:id", (req, res) => {
-    const id = req.params.id
+app.get("/downloadreport/:id/:role_id", (req, res) => {
+    const id = req.params.id;
+    const role_id =req.params.role_id
 
-    const getalldata = `select projectmember.member as Name,atte.attdate as Date,atte.attstatus as Status, atte.Time_In ,atte.Time_out from projectmember inner join atte on atte.PM_id=projectmember.PM_id where proj_id=${id} order by atte.attdate, atte.PM_id;`;
+    const getalldata = `
+    SELECT 
+    projectmember.member AS Name,
+    atte.attdate AS Date,
+    atte.attstatus AS Status,
+    atte.Time_In,
+    atte.Time_out,
+    TIMESTAMPDIFF(
+        MINUTE, 
+        STR_TO_DATE(atte.Time_In,'%H:%i'),
+        STR_TO_DATE(atte.Time_out,'%H:%i')
+       )/60 as Working_Hours,
+    (SELECT roles.role_name 
+     FROM roles 
+     WHERE roles.role_id = ${role_id} AND roles.project_id = ${id}
+     LIMIT 1) AS role_name
+FROM 
+    projectmember
+INNER JOIN 
+    atte ON atte.PM_id = projectmember.PM_id
+WHERE 
+    proj_id = ${id} AND role_id = ${role_id}
+ORDER BY 
+    atte.attdate, atte.PM_id;
+
+    `;
     db.query(getalldata, (err, result) => {
-        console.log(err);
-        res.send(result)
+        if (err) {
+            console.log(err);
+            res.status(500).send("Error retrieving data");
+        } else {
+            if (result.length === 0) {
+                res.status(404).send("No data found");
+            } else {
+                res.send(result);
+            }
+        }
+    });
+});
 
-    })
-})
+
+app.get("/downloadreport1/:id", (req, res) => {
+    const id = req.params.id;
+  //  const role_id = req.params.role_id;
+    
+
+    const getalldata = `
+    select projectmember.member as Name,atte.attdate as Date,
+    atte.attstatus as Status, atte.Time_In ,atte.Time_out ,
+    ROUND(TIMESTAMPDIFF(
+                            MINUTE, 
+                            STR_TO_DATE(atte.Time_In,'%H:%i'),
+                            STR_TO_DATE(atte.Time_out,'%H:%i')
+                           )/60,2) as Working_Hours,
+                           (SELECT roles.role_name 
+     FROM roles 
+     WHERE project_id=${id} and roles.role_id = projectmember.role_id LIMIT 1)
+	as Role_name
+    from projectmember 
+    inner join atte
+     on atte.PM_id=projectmember.PM_id where proj_id=${id} 
+     order by STR_TO_DATE(atte.attdate,"%DD-%MM-%YYYY"),Role_id`;
+       db.query(getalldata, (err, result) => {
+        if (err) {
+            console.log(err);
+            res.status(500).send("Error retrieving data");
+        } else {
+            if (result.length === 0) {
+                res.status(404).send("No data found");
+            } else {
+                res.send(result);
+            }
+        }
+    });
+});
+
 
 
 
@@ -441,18 +554,20 @@ app.get("/getstatusmember/:id", (req, res) => {
 
 
 //insert members by admin
-app.post("/addmembers/:id", (req, res) => {
-    const { member } = req.body
-    const id = req.params.id
-    const addmemberdata = `insert into projectmember (member,project_id) values (?,${id});`;
-    db.query(addmemberdata, [member], (err, doc) => {
+app.post("/addmembers/:project_id/:role_id", (req, res) => {
+    const { member } = req.body;
+    const id = req.params.project_id;
+    const role_id = req.params.role_id;
+    const addmemberdata = `insert into projectmember (member, project_id, role_id) values (?, ?, ?);`;
+    db.query(addmemberdata, [member, id, role_id], (err, doc) => {
         if (err) {
             console.log(err);
         } else {
             res.json(doc);
         }
-    })
-})
+    });
+});
+
 
 app.post("/addproject", (req, res) => {
     const { projectName } = req.body
@@ -466,6 +581,30 @@ app.post("/addproject", (req, res) => {
         }
     })
 })
+
+app.post("/addrole/:project_id", (req, res) => {
+    const { role_name } = req.body;
+    const { project_id } = req.params; // Retrieve project_id from route parameter
+
+    if (!role_name || !project_id) {
+        res.status(400).json({ error: "role_name and project_id are required fields" });
+        console.log(role_name, project_id);
+        return;
+    }
+
+    const addmemberdata = `INSERT INTO roles (role_name, project_id) VALUES (?, ?);`;
+    console.log(role_name, project_id);
+    db.query(addmemberdata, [role_name, project_id], (err, doc) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({ error: "An error occurred while executing the database query" });
+        } else {
+            res.json(doc);
+        }
+    });
+});
+
+
 
 
 
