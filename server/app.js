@@ -365,21 +365,27 @@ app.get("/downloadreport1/:id", (req, res) => {
     
 
     const getalldata = `
-    select projectmember.member as Name,atte.attdate as Date,
-    atte.attstatus as Status, atte.Time_In ,atte.Time_out ,
+    SELECT 
+    projectmember.member AS Name,
+    atte.attdate AS Date,
+    atte.attstatus AS Status,
+    atte.Time_In,
+    atte.Time_out,
+    
     ROUND(TIMESTAMPDIFF(
                             MINUTE, 
                             STR_TO_DATE(atte.Time_In,'%H:%i'),
                             STR_TO_DATE(atte.Time_out,'%H:%i')
-                           )/60,2) as Working_Hours,
+                           )/60,2) as diff,
                            (SELECT roles.role_name 
      FROM roles 
      WHERE project_id=${id} and roles.role_id = projectmember.role_id LIMIT 1)
 	as Role_name
-    from projectmember 
+	from projectmember 
     inner join atte
-     on atte.PM_id=projectmember.PM_id where proj_id=${id} 
-     order by STR_TO_DATE(atte.attdate,"%DD-%MM-%YYYY"),Role_id`;
+     on atte.PM_id=projectmember.PM_id where proj_id=28
+     order by  STR_TO_DATE(atte.attdate,"%DD-%MM-%YYYY"),Role_id;
+`;
        db.query(getalldata, (err, result) => {
         if (err) {
             console.log(err);
